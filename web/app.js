@@ -290,6 +290,9 @@ async function renderPayment(payment) {
           : '<canvas class="qr-canvas" id="qrCanvas" width="260" height="260" aria-label="Payment QR"></canvas>'}
       </div>
       <div class="pay-actions">
+        ${payment.qrImageUrl
+          ? `<a class="secondary-action" id="saveQr" href="/api/payments/${encodeURIComponent(payment.id)}/qr" download="teng-parking-qr.svg">บันทึก QR / Save QR</a>`
+          : ''}
         <button class="primary-action" id="confirmPayment">เดโม: ยืนยันจ่ายแล้ว / Demo paid</button>
       </div>
       <p class="screen-note">เมื่อจ่ายสำเร็จ ระบบจะสั่ง ESP32 เปิดไม้กั้น / Payment success opens the ESP32 gate</p>

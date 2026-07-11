@@ -317,6 +317,86 @@ test('creates an Opn PromptPay payment when provider is configured', async () =>
   }
 });
 
+test('proxies an Opn QR image for mobile saving', async () => {
+  const app = createApp({
+    env: {
+      PAYMENT_PROVIDER: 'opn',
+      OPN_PUBLIC_KEY: 'pkey_test_abc',
+      OPN_SECRET_KEY: 'skey_test_abc'
+    },
+    fetchImpl: async (url) => {
+      if (url === 'https://api.omise.co/entry-qr.svg') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'image/svg+xml' }),
+          arrayBuffer: async () => Buffer.from('<svg>qr</svg>')
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'chrg_test_entry',
+          status: 'pending',
+          source: {
+            scannable_code: {
+              image: { download_uri: 'https://api.omise.co/entry-qr.svg' }
+            }
+          }
+        })
+      };
+    }
+  });
+  const server = await listen(app);
+
+  try {
+    const created = await request(server.baseUrl, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ plate: 'UBON-1234', packageId: '1h', gateId: 'entry-1' })
+    });
+
+    const qr = await fetch(`${server.baseUrl}/api/payments/${created.body.payment.id}/qr`);
+    const text = await qr.text();
+
+    assert.equal(qr.status, 200);
+    assert.equal(qr.headers.get('content-type'), 'image/svg+xml');
+    assert.equal(qr.headers.get('content-disposition'), 'attachment; filename="teng-parking-qr.svg"');
+    assert.equal(text, '<svg>qr</svg>');
+  } finally {
+    await server.close();
+  }
+});
+
+test('manual admin gate open creates a gate command for emergency control', async () => {
+  const app = createApp({
+    env: { ADMIN_GATE_TOKEN: 'admin-test-token' }
+  });
+  const server = await listen(app);
+
+  try {
+    const blocked = await request(server.baseUrl, '/api/gates/entry-1/open', { method: 'POST' });
+    assert.equal(blocked.status, 401);
+
+    const opened = await request(server.baseUrl, '/api/gates/entry-1/open', {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-test-token' },
+      body: JSON.stringify({ sessionId: 'manual-entry' })
+    });
+
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.gateCommand.action, 'OPEN_GATE');
+    assert.equal(opened.body.gateCommand.sessionId, 'manual-entry');
+
+    const command = await request(server.baseUrl, '/gate/entry-1/command');
+    assert.equal(command.status, 200);
+    assert.equal(command.body.action, 'OPEN_GATE');
+  } finally {
+    await server.close();
+  }
+});
+
 test('marks an Opn session paid and opens the gate from charge.complete webhook', async () => {
   const app = createApp({
     env: {

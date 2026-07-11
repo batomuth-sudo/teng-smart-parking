@@ -60,6 +60,16 @@ function unauthorized(response) {
   response.end('Authentication required');
 }
 
+function isAdminGateAuthorized(request, env) {
+  if (!env.ADMIN_GATE_TOKEN) return true;
+
+  const authorization = request.headers.authorization ?? '';
+  const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : null;
+  const headerToken = request.headers['x-admin-token'];
+
+  return bearerToken === env.ADMIN_GATE_TOKEN || headerToken === env.ADMIN_GATE_TOKEN;
+}
+
 async function parseJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -281,6 +291,52 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
           session: serializeSession(session),
           payment
         });
+        return;
+      }
+
+      const paymentQrMatch = url.pathname.match(/^\/api\/payments\/([^/]+)\/qr$/);
+      if (request.method === 'GET' && paymentQrMatch) {
+        const payment = store.payments.get(paymentQrMatch[1]);
+        if (!payment?.qrImageUrl) {
+          json(response, 404, { error: 'Payment QR not found' });
+          return;
+        }
+
+        const upstream = await fetchImpl(payment.qrImageUrl);
+        if (!upstream.ok) {
+          json(response, 502, { error: 'Payment QR download failed' });
+          return;
+        }
+
+        const contentType = upstream.headers?.get?.('content-type') ?? 'image/svg+xml';
+        const extension = contentType.includes('png') ? 'png' : 'svg';
+        const image = Buffer.from(await upstream.arrayBuffer());
+
+        response.writeHead(200, {
+          'content-type': contentType,
+          'content-disposition': `attachment; filename="teng-parking-qr.${extension}"`,
+          'cache-control': 'no-store'
+        });
+        response.end(image);
+        return;
+      }
+
+      const manualGateMatch = url.pathname.match(/^\/api\/gates\/([^/]+)\/open$/);
+      if (request.method === 'POST' && manualGateMatch) {
+        if (!isAdminGateAuthorized(request, env)) {
+          json(response, 401, { error: 'Admin gate token required' });
+          return;
+        }
+
+        const body = await parseJson(request);
+        const gateCommand = createGateCommand({
+          gateId: manualGateMatch[1],
+          sessionId: body.sessionId ?? `manual_${Date.now()}`,
+          now: new Date()
+        });
+        store.commandsByGate.set(gateCommand.gateId, gateCommand);
+
+        json(response, 200, { gateCommand: serializeCommand(gateCommand) });
         return;
       }
 

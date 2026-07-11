@@ -182,9 +182,15 @@ p {
 
 .primary-action,
 .secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   min-height: 58px;
   padding: 0 18px;
+  font-family: inherit;
+  font-size: 16px;
+  text-decoration: none;
 }
 
 .primary-action {
