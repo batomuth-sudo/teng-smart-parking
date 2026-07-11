@@ -285,7 +285,9 @@ async function renderPayment(payment) {
         <p>ยอดชำระ / Amount: ${payment.amountThb} บาท / THB</p>
       </div>
       <div class="qr-panel">
-        <canvas class="qr-canvas" id="qrCanvas" width="260" height="260" aria-label="Payment QR"></canvas>
+        ${payment.qrImageUrl
+          ? `<img class="qr-canvas qr-image" src="${escapeHtml(payment.qrImageUrl)}" alt="PromptPay QR" />`
+          : '<canvas class="qr-canvas" id="qrCanvas" width="260" height="260" aria-label="Payment QR"></canvas>'}
       </div>
       <div class="pay-actions">
         <button class="primary-action" id="confirmPayment">เดโม: ยืนยันจ่ายแล้ว / Demo paid</button>
@@ -295,7 +297,7 @@ async function renderPayment(payment) {
   `);
   document.querySelector('#backPackages').addEventListener('click', renderPackages);
   document.querySelector('#confirmPayment').addEventListener('click', confirmDemoPayment);
-  await renderQr(document.querySelector('#qrCanvas'), payment.qrText);
+  if (payment.qrText) await renderQr(document.querySelector('#qrCanvas'), payment.qrText);
 }
 
 async function confirmDemoPayment() {

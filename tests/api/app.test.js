@@ -278,6 +278,97 @@ test('creates a demo session, confirms payment, and exposes gate command once', 
   }
 });
 
+test('creates an Opn PromptPay payment when provider is configured', async () => {
+  const app = createApp({
+    env: {
+      PAYMENT_PROVIDER: 'opn',
+      OPN_PUBLIC_KEY: 'pkey_test_abc',
+      OPN_SECRET_KEY: 'skey_test_abc'
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 'chrg_test_entry',
+        status: 'pending',
+        source: {
+          scannable_code: {
+            image: { download_uri: 'https://api.omise.co/entry-qr.svg' }
+          }
+        }
+      })
+    })
+  });
+  const server = await listen(app);
+
+  try {
+    const created = await request(server.baseUrl, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ plate: 'UBON-1234', packageId: '1h', gateId: 'entry-1' })
+    });
+
+    assert.equal(created.status, 201);
+    assert.equal(created.body.payment.provider, 'opn');
+    assert.equal(created.body.payment.providerChargeId, 'chrg_test_entry');
+    assert.equal(created.body.payment.qrImageUrl, 'https://api.omise.co/entry-qr.svg');
+    assert.equal(created.body.payment.qrText, null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('marks an Opn session paid and opens the gate from charge.complete webhook', async () => {
+  const app = createApp({
+    env: {
+      PAYMENT_PROVIDER: 'opn',
+      OPN_PUBLIC_KEY: 'pkey_test_abc',
+      OPN_SECRET_KEY: 'skey_test_abc'
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 'chrg_test_webhook',
+        status: 'pending',
+        source: {
+          scannable_code: {
+            image: { download_uri: 'https://api.omise.co/webhook-qr.svg' }
+          }
+        }
+      })
+    })
+  });
+  const server = await listen(app);
+
+  try {
+    await request(server.baseUrl, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ plate: 'UBON-1234', packageId: '1h', gateId: 'entry-1' })
+    });
+
+    const webhook = await request(server.baseUrl, '/api/payments/webhook/opn', {
+      method: 'POST',
+      body: JSON.stringify({
+        key: 'charge.complete',
+        data: {
+          id: 'chrg_test_webhook',
+          status: 'successful'
+        }
+      })
+    });
+
+    assert.equal(webhook.status, 202);
+    assert.equal(webhook.body.paymentStatus, 'confirmed');
+    assert.equal(webhook.body.gateCommand.action, 'OPEN_GATE');
+
+    const command = await request(server.baseUrl, '/gate/entry-1/command');
+    assert.equal(command.status, 200);
+    assert.equal(command.body.action, 'OPEN_GATE');
+  } finally {
+    await server.close();
+  }
+});
+
 test('creates a custom duration session from hourly or daily unit', async () => {
   const app = createApp();
   const server = await listen(app);

@@ -3,7 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGateCommand, consumeGateCommand } from './core/gateCommands.js';
 import { CUSTOM_DURATION_RATES } from './core/packages.js';
-import { getPaymentProviderStatus, parseOpnWebhook, verifyOpnWebhookSignature } from './core/paymentProviders.js';
+import {
+  createOpnPromptPayCharge,
+  getPaymentProviderStatus,
+  parseOpnWebhook,
+  verifyOpnWebhookSignature
+} from './core/paymentProviders.js';
 import { calculateOvertime, createSession, findSessionForExit } from './core/sessions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -89,13 +94,37 @@ function serializeCommand(command) {
   };
 }
 
-function createPayment({ session }) {
+async function createPayment({ session, env, fetchImpl }) {
+  if (env.PAYMENT_PROVIDER === 'opn' && env.OPN_PUBLIC_KEY && env.OPN_SECRET_KEY) {
+    const charge = await createOpnPromptPayCharge({
+      amountThb: session.amountThb,
+      sessionId: session.id,
+      plate: session.plate,
+      env,
+      fetchImpl
+    });
+
+    return {
+      id: `pay_${session.id.slice(5)}`,
+      provider: 'opn',
+      providerChargeId: charge.id,
+      sessionId: session.id,
+      amountThb: session.amountThb,
+      status: charge.status === 'successful' ? 'confirmed' : 'pending',
+      qrText: null,
+      qrImageUrl: charge.qrImageUrl
+    };
+  }
+
   return {
     id: `pay_${session.id.slice(5)}`,
+    provider: 'mock',
+    providerChargeId: null,
     sessionId: session.id,
     amountThb: session.amountThb,
     status: 'pending',
-    qrText: `DEMO_PROMPTPAY_QR:${session.amountThb}:${session.id}`
+    qrText: `DEMO_PROMPTPAY_QR:${session.amountThb}:${session.id}`,
+    qrImageUrl: null
   };
 }
 
@@ -136,7 +165,7 @@ async function serveStatic(request, response) {
   }
 }
 
-export function createApp() {
+export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
   const store = {
     sessions: [],
     payments: new Map(),
@@ -173,7 +202,7 @@ export function createApp() {
       }
 
       if (request.method === 'GET' && url.pathname === '/api/payment-provider') {
-        json(response, 200, getPaymentProviderStatus());
+        json(response, 200, getPaymentProviderStatus(env));
         return;
       }
 
@@ -183,7 +212,7 @@ export function createApp() {
           rawBody: raw,
           signatureHeader: request.headers['omise-signature'],
           timestampHeader: request.headers['omise-signature-timestamp'],
-          webhookSecret: process.env.OPN_WEBHOOK_SECRET
+          webhookSecret: env.OPN_WEBHOOK_SECRET
         });
 
         if (!signature.ok) {
@@ -191,9 +220,41 @@ export function createApp() {
           return;
         }
 
+        const parsedWebhook = parseOpnWebhook(body);
+        let paymentStatus = null;
+        let gateCommand = null;
+
+        if (parsedWebhook.eventKey === 'charge.complete') {
+          const payment = [...store.payments.values()].find(
+            (item) => item.provider === 'opn' && item.providerChargeId === parsedWebhook.chargeId
+          );
+          const chargeStatus = body?.data?.status;
+
+          if (payment && chargeStatus === 'successful') {
+            payment.status = 'confirmed';
+            paymentStatus = payment.status;
+            const session = store.sessions.find((item) => item.id === payment.sessionId);
+
+            if (session) {
+              session.status = 'paid';
+              gateCommand = createGateCommand({
+                gateId: session.entryGateId,
+                sessionId: session.id,
+                now: new Date()
+              });
+              store.commandsByGate.set(gateCommand.gateId, gateCommand);
+            }
+          } else if (payment && chargeStatus) {
+            payment.status = chargeStatus;
+            paymentStatus = payment.status;
+          }
+        }
+
         json(response, 202, {
-          ...parseOpnWebhook(body),
-          signatureVerified: !signature.skipped
+          ...parsedWebhook,
+          signatureVerified: !signature.skipped,
+          paymentStatus,
+          gateCommand: gateCommand ? serializeCommand(gateCommand) : null
         });
         return;
       }
@@ -211,7 +272,7 @@ export function createApp() {
           status: 'pending_payment',
           entryGateId: body.gateId ?? 'entry-1'
         };
-        const payment = createPayment({ session });
+        const payment = await createPayment({ session, env, fetchImpl });
 
         store.sessions.push(session);
         store.payments.set(payment.id, payment);

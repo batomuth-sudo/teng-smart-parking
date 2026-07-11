@@ -41,6 +41,53 @@ export function parseOpnWebhook(body) {
   };
 }
 
+export function getOpnQrImageUrl(charge) {
+  return charge?.source?.scannable_code?.image?.download_uri ?? null;
+}
+
+export async function createOpnPromptPayCharge({
+  amountThb,
+  sessionId,
+  plate,
+  env = process.env,
+  fetchImpl = fetch
+}) {
+  if (!env.OPN_SECRET_KEY) {
+    throw new Error('OPN_SECRET_KEY is required to create an Opn PromptPay charge.');
+  }
+
+  const body = new URLSearchParams();
+  body.set('amount', String(Math.round(amountThb * 100)));
+  body.set('currency', 'THB');
+  body.set('source[type]', 'promptpay');
+  body.set('metadata[session_id]', sessionId);
+  body.set('metadata[plate]', plate);
+
+  const authorization = Buffer.from(`${env.OPN_SECRET_KEY}:`).toString('base64');
+  const response = await fetchImpl('https://api.omise.co/charges', {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${authorization}`,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const sanitized = errorText.replaceAll(env.OPN_SECRET_KEY, '[redacted]');
+    throw new Error(`Opn PromptPay charge failed: ${response.status} ${sanitized}`);
+  }
+
+  const charge = await response.json();
+  return {
+    id: charge.id,
+    status: charge.status,
+    qrImageUrl: getOpnQrImageUrl(charge),
+    raw: charge
+  };
+}
+
 export function verifyOpnWebhookSignature({
   rawBody,
   signatureHeader,
