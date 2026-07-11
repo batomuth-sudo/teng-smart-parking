@@ -104,6 +104,36 @@ function serializeCommand(command) {
   };
 }
 
+function decodeSvgEntityText(value) {
+  return value
+    .replaceAll('&amp;', '&')
+    .replaceAll('&#43;', '+')
+    .replaceAll('&#x2B;', '+')
+    .replaceAll('&#x2b;', '+');
+}
+
+function extractLargestEmbeddedPng(svgText) {
+  const imageTags = svgText.match(/<image\b[^>]*>/gi) ?? [];
+  let best = null;
+
+  for (const tag of imageTags) {
+    const hrefMatch = tag.match(/\bhref=["']data:image\/png;base64,([^"']+)["']/i);
+    if (!hrefMatch) continue;
+
+    const width = Number.parseFloat(tag.match(/\bwidth=["']([^"']+)["']/i)?.[1] ?? '0');
+    const height = Number.parseFloat(tag.match(/\bheight=["']([^"']+)["']/i)?.[1] ?? '0');
+    const area = Number.isFinite(width * height) ? width * height : 0;
+    const base64 = decodeSvgEntityText(hrefMatch[1]).replace(/\s/g, '');
+    const buffer = Buffer.from(base64, 'base64');
+
+    if (!best || area > best.area || (area === best.area && buffer.length > best.buffer.length)) {
+      best = { area, buffer };
+    }
+  }
+
+  return best?.buffer ?? null;
+}
+
 async function createPayment({ session, env, fetchImpl }) {
   if (env.PAYMENT_PROVIDER === 'opn' && env.OPN_PUBLIC_KEY && env.OPN_SECRET_KEY) {
     const charge = await createOpnPromptPayCharge({
@@ -309,12 +339,20 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         }
 
         const contentType = upstream.headers?.get?.('content-type') ?? 'image/svg+xml';
-        const extension = contentType.includes('png') ? 'png' : 'svg';
-        const image = Buffer.from(await upstream.arrayBuffer());
+        const sourceImage = Buffer.from(await upstream.arrayBuffer());
+        let image = sourceImage;
+
+        if (!contentType.includes('png')) {
+          image = extractLargestEmbeddedPng(sourceImage.toString('utf8'));
+          if (!image) {
+            json(response, 502, { error: 'Payment QR PNG not found in provider image' });
+            return;
+          }
+        }
 
         response.writeHead(200, {
-          'content-type': contentType,
-          'content-disposition': `attachment; filename="teng-parking-qr.${extension}"`,
+          'content-type': 'image/png',
+          'content-disposition': 'attachment; filename="teng-parking-qr.png"',
           'cache-control': 'no-store'
         });
         response.end(image);

@@ -330,7 +330,13 @@ test('proxies an Opn QR image for mobile saving', async () => {
           ok: true,
           status: 200,
           headers: new Headers({ 'content-type': 'image/svg+xml' }),
-          arrayBuffer: async () => Buffer.from('<svg>qr</svg>')
+          arrayBuffer: async () => Buffer.from(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+              <rect width="128" height="128" fill="#fff"/>
+              <image x="8" y="8" width="16" height="16" href="data:image/png;base64,iVBORw0KGgo="/>
+              <image x="32" y="32" width="96" height="96" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="/>
+            </svg>
+          `)
         };
       }
 
@@ -358,12 +364,12 @@ test('proxies an Opn QR image for mobile saving', async () => {
     });
 
     const qr = await fetch(`${server.baseUrl}/api/payments/${created.body.payment.id}/qr`);
-    const text = await qr.text();
+    const bytes = Buffer.from(await qr.arrayBuffer());
 
     assert.equal(qr.status, 200);
-    assert.equal(qr.headers.get('content-type'), 'image/svg+xml');
-    assert.equal(qr.headers.get('content-disposition'), 'attachment; filename="teng-parking-qr.svg"');
-    assert.equal(text, '<svg>qr</svg>');
+    assert.equal(qr.headers.get('content-type'), 'image/png');
+    assert.equal(qr.headers.get('content-disposition'), 'attachment; filename="teng-parking-qr.png"');
+    assert.deepEqual([...bytes.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   } finally {
     await server.close();
   }

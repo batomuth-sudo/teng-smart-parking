@@ -291,7 +291,7 @@ async function renderPayment(payment) {
       </div>
       <div class="pay-actions">
         ${payment.qrImageUrl
-          ? `<a class="secondary-action" id="saveQr" href="/api/payments/${encodeURIComponent(payment.id)}/qr" download="teng-parking-qr.svg">บันทึก QR / Save QR</a>`
+          ? `<a class="secondary-action" id="saveQr" href="/api/payments/${encodeURIComponent(payment.id)}/qr" download="teng-parking-qr.png">บันทึก QR / Save QR</a>`
           : ''}
         <button class="primary-action" id="confirmPayment">เดโม: ยืนยันจ่ายแล้ว / Demo paid</button>
       </div>
