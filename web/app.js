@@ -295,7 +295,7 @@ async function renderPayment(payment) {
           : ''}
         <button class="primary-action" id="confirmPayment">เดโม: ยืนยันจ่ายแล้ว / Demo paid</button>
       </div>
-      <p class="screen-note">เมื่อจ่ายสำเร็จ ระบบจะสั่ง ESP32 เปิดไม้กั้น / Payment success opens the ESP32 gate</p>
+      <p class="screen-note">ประตูจะเปิดทันที / Gate opens immediately</p>
     </section>
   `);
   document.querySelector('#backPackages').addEventListener('click', renderPackages);
