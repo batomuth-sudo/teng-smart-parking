@@ -397,6 +397,24 @@ test('manual admin gate open creates a gate command for emergency control', asyn
   }
 });
 
+test('manual admin gate open is disabled until an admin token is configured', async () => {
+  const app = createApp();
+  const server = await listen(app);
+
+  try {
+    const opened = await request(server.baseUrl, '/api/gates/entry-1/open', {
+      method: 'POST',
+      headers: { authorization: 'Bearer anything' },
+      body: JSON.stringify({ sessionId: 'manual-entry' })
+    });
+
+    assert.equal(opened.status, 503);
+    assert.equal(opened.body.error, 'ADMIN_GATE_TOKEN is not configured');
+  } finally {
+    await server.close();
+  }
+});
+
 test('marks an Opn session paid and opens the gate from charge.complete webhook', async () => {
   const app = createApp({
     env: {

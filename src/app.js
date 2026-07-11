@@ -61,7 +61,7 @@ function unauthorized(response) {
 }
 
 function isAdminGateAuthorized(request, env) {
-  if (!env.ADMIN_GATE_TOKEN) return true;
+  if (!env.ADMIN_GATE_TOKEN) return false;
 
   const authorization = request.headers.authorization ?? '';
   const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : null;
@@ -323,6 +323,11 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
 
       const manualGateMatch = url.pathname.match(/^\/api\/gates\/([^/]+)\/open$/);
       if (request.method === 'POST' && manualGateMatch) {
+        if (!env.ADMIN_GATE_TOKEN) {
+          json(response, 503, { error: 'ADMIN_GATE_TOKEN is not configured' });
+          return;
+        }
+
         if (!isAdminGateAuthorized(request, env)) {
           json(response, 401, { error: 'Admin gate token required' });
           return;
