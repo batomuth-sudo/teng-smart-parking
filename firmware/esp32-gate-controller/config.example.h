@@ -1,0 +1,16 @@
+#pragma once
+
+#define WIFI_SSID "YOUR_WIFI_NAME"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+#define API_BASE_URL "http://192.168.1.100:8080"
+#define GATE_ID "entry-1"
+
+#define RELAY_PIN 26
+#define MANUAL_OVERRIDE_PIN 27
+#define GATE_CLOSED_SENSOR_PIN 32
+#define STATUS_LED_PIN 2
+
+#define POLL_INTERVAL_MS 2000
+#define RELAY_PULSE_MS 700
+#define RELAY_ACTIVE_HIGH true

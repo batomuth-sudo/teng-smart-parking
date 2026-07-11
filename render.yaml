@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: teng-smart-parking
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: "node src/server.js"
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PAYMENT_PROVIDER
+        value: "opn"
+      - key: OPN_PUBLIC_KEY
+        sync: false
+      - key: OPN_SECRET_KEY
+        sync: false
+      - key: OPN_WEBHOOK_SECRET
+        sync: false
