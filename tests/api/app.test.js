@@ -536,3 +536,66 @@ test('finds a paid session for exit by license plate fallback', async () => {
     await server.close();
   }
 });
+
+test('records operations logs for entry, payment, and exit events', async () => {
+  const app = createApp({
+    env: { ADMIN_GATE_TOKEN: 'admin-test-token' }
+  });
+  const server = await listen(app);
+
+  try {
+    const created = await request(server.baseUrl, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ plate: 'ubon 2468', packageId: '1h', gateId: 'entry-1' })
+    });
+    await request(server.baseUrl, `/api/payments/${created.body.payment.id}/confirm`, { method: 'POST' });
+    await request(server.baseUrl, '/api/sessions/exit', {
+      method: 'POST',
+      body: JSON.stringify({ token: created.body.session.token, gateId: 'exit-1' })
+    });
+
+    const logs = await request(server.baseUrl, '/api/operations/logs', {
+      headers: { authorization: 'Bearer admin-test-token' }
+    });
+
+    assert.equal(logs.status, 200);
+    assert.deepEqual(logs.body.events.map((event) => event.eventType), [
+      'entry_created',
+      'payment_confirmed',
+      'exit_approved'
+    ]);
+    assert.equal(logs.body.events[0].plate, 'ubon 2468');
+    assert.equal(logs.body.events[0].normalizedPlate, 'UBON2468');
+    assert.equal(logs.body.events[1].amountThb, 20);
+    assert.equal(logs.body.events[2].gateId, 'exit-1');
+  } finally {
+    await server.close();
+  }
+});
+
+test('exports operations logs as CSV for Google Sheets import', async () => {
+  const app = createApp({
+    env: { ADMIN_GATE_TOKEN: 'admin-test-token' }
+  });
+  const server = await listen(app);
+
+  try {
+    await request(server.baseUrl, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ plate: 'UBON-9999', packageId: '3h', gateId: 'entry-1' })
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/operations/logs.csv`, {
+      headers: { authorization: 'Bearer admin-test-token' }
+    });
+    const csv = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'text/csv; charset=utf-8');
+    assert.match(csv, /Event ID,Session ID,Payment ID,Charge ID,Event Type/);
+    assert.match(csv, /entry_created/);
+    assert.match(csv, /UBON-9999/);
+  } finally {
+    await server.close();
+  }
+});

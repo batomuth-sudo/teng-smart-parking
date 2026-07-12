@@ -71,6 +71,7 @@ The MVP should not require automatic license-plate recognition. LPR can be a pha
 - Mobile web page for entry/exit
 - ESP32 firmware polling or subscribing for gate commands
 - Admin CSV/Google Sheet export for daily revenue
+- Operations log for entry time, paid time, exit time, plate, amount, overtime, gate ID, and event source
 
 ## Mobile QR Sign MVP Flow
 

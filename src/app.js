@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,26 @@ const OVERTIME_POLICY = Object.freeze({
   disclosureTh: 'ค่าจอดเกินเวลา 20 บาทต่อชั่วโมง เศษเวลาปัดขึ้นเป็นชั่วโมงถัดไป',
   disclosureEn: 'Overtime is 20 THB per hour. Any partial hour is rounded up to the next hour.'
 });
+const OPERATION_LOG_HEADERS = Object.freeze([
+  'Event ID',
+  'Session ID',
+  'Payment ID',
+  'Charge ID',
+  'Event Type',
+  'Status',
+  'Entry Time',
+  'Paid Time',
+  'Exit Time',
+  'Plate',
+  'Normalized Plate',
+  'Package',
+  'Amount THB',
+  'Overtime THB',
+  'Gate ID',
+  'Token Last 6',
+  'Source',
+  'Notes'
+]);
 
 function json(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -68,6 +89,101 @@ function isAdminGateAuthorized(request, env) {
   const headerToken = request.headers['x-admin-token'];
 
   return bearerToken === env.ADMIN_GATE_TOKEN || headerToken === env.ADMIN_GATE_TOKEN;
+}
+
+function toBangkokTimestamp(date) {
+  if (!date) return '';
+  return new Date(date).toLocaleString('sv-SE', {
+    timeZone: 'Asia/Bangkok',
+    hour12: false
+  });
+}
+
+function createOperationEvent({
+  session,
+  payment = null,
+  eventType,
+  status,
+  gateId = '',
+  paidTime = null,
+  exitTime = null,
+  overtimeThb = 0,
+  source = 'system',
+  notes = ''
+}) {
+  return {
+    eventId: `evt_${crypto.randomBytes(8).toString('hex')}`,
+    sessionId: session?.id ?? '',
+    paymentId: payment?.id ?? '',
+    chargeId: payment?.providerChargeId ?? '',
+    eventType,
+    status,
+    entryTime: toBangkokTimestamp(session?.createdAt),
+    paidTime: toBangkokTimestamp(paidTime),
+    exitTime: toBangkokTimestamp(exitTime),
+    plate: session?.plate ?? '',
+    normalizedPlate: session?.normalizedPlate ?? '',
+    packageId: session?.packageId ?? '',
+    amountThb: payment?.amountThb ?? session?.amountThb ?? 0,
+    overtimeThb,
+    gateId,
+    tokenLast6: session?.token ? session.token.slice(-6) : '',
+    source,
+    notes
+  };
+}
+
+function appendOperationEvent(store, event) {
+  store.operationEvents.push(event);
+  return event;
+}
+
+function operationEventToRow(event) {
+  return [
+    event.eventId,
+    event.sessionId,
+    event.paymentId,
+    event.chargeId,
+    event.eventType,
+    event.status,
+    event.entryTime,
+    event.paidTime,
+    event.exitTime,
+    event.plate,
+    event.normalizedPlate,
+    event.packageId,
+    event.amountThb,
+    event.overtimeThb,
+    event.gateId,
+    event.tokenLast6,
+    event.source,
+    event.notes
+  ];
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function operationsToCsv(events) {
+  const rows = [OPERATION_LOG_HEADERS, ...events.map(operationEventToRow)];
+  return `${rows.map((row) => row.map(csvEscape).join(',')).join('\n')}\n`;
+}
+
+function requireAdminDataAccess(request, response, env) {
+  if (!env.ADMIN_GATE_TOKEN) {
+    json(response, 503, { error: 'ADMIN_GATE_TOKEN is not configured' });
+    return false;
+  }
+
+  if (!isAdminGateAuthorized(request, env)) {
+    json(response, 401, { error: 'Admin token required' });
+    return false;
+  }
+
+  return true;
 }
 
 async function parseJson(request) {
@@ -209,7 +325,8 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
   const store = {
     sessions: [],
     payments: new Map(),
-    commandsByGate: new Map()
+    commandsByGate: new Map(),
+    operationEvents: []
   };
 
   return async function app(request, response) {
@@ -243,6 +360,25 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
 
       if (request.method === 'GET' && url.pathname === '/api/payment-provider') {
         json(response, 200, getPaymentProviderStatus(env));
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/operations/logs') {
+        if (!requireAdminDataAccess(request, response, env)) return;
+
+        json(response, 200, { events: store.operationEvents });
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/operations/logs.csv') {
+        if (!requireAdminDataAccess(request, response, env)) return;
+
+        response.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': 'attachment; filename="teng-parking-operations-log.csv"',
+          'cache-control': 'no-store'
+        });
+        response.end(operationsToCsv(store.operationEvents));
         return;
       }
 
@@ -283,6 +419,16 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
                 now: new Date()
               });
               store.commandsByGate.set(gateCommand.gateId, gateCommand);
+              appendOperationEvent(store, createOperationEvent({
+                session,
+                payment,
+                eventType: 'payment_confirmed',
+                status: session.status,
+                gateId: session.entryGateId,
+                paidTime: new Date(),
+                source: 'opn_webhook',
+                notes: 'Payment success'
+              }));
             }
           } else if (payment && chargeStatus) {
             payment.status = chargeStatus;
@@ -316,6 +462,15 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
 
         store.sessions.push(session);
         store.payments.set(payment.id, payment);
+        appendOperationEvent(store, createOperationEvent({
+          session,
+          payment,
+          eventType: 'entry_created',
+          status: session.status,
+          gateId: session.entryGateId,
+          source: 'system',
+          notes: 'Session created'
+        }));
 
         json(response, 201, {
           session: serializeSession(session),
@@ -378,6 +533,14 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
           now: new Date()
         });
         store.commandsByGate.set(gateCommand.gateId, gateCommand);
+        appendOperationEvent(store, createOperationEvent({
+          session: { id: body.sessionId ?? gateCommand.sessionId, createdAt: new Date() },
+          eventType: 'manual_gate_open',
+          status: 'manual',
+          gateId: gateCommand.gateId,
+          source: 'admin',
+          notes: 'Manual gate open'
+        }));
 
         json(response, 200, { gateCommand: serializeCommand(gateCommand) });
         return;
@@ -394,12 +557,23 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         payment.status = 'confirmed';
         const session = store.sessions.find((item) => item.id === payment.sessionId);
         session.status = 'paid';
+        const paidAt = new Date();
         const gateCommand = createGateCommand({
           gateId: session.entryGateId,
           sessionId: session.id,
-          now: new Date()
+          now: paidAt
         });
         store.commandsByGate.set(gateCommand.gateId, gateCommand);
+        appendOperationEvent(store, createOperationEvent({
+          session,
+          payment,
+          eventType: 'payment_confirmed',
+          status: session.status,
+          gateId: session.entryGateId,
+          paidTime: paidAt,
+          source: payment.provider === 'mock' ? 'demo_confirm' : 'system',
+          notes: 'Payment success'
+        }));
 
         json(response, 200, {
           session: serializeSession(session),
@@ -440,12 +614,34 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         let gateCommand = null;
 
         if (overtime.amountDueThb === 0) {
+          const exitAt = new Date();
           gateCommand = createGateCommand({
             gateId: body.gateId ?? 'exit-1',
             sessionId: session.id,
-            now: new Date()
+            now: exitAt
           });
           store.commandsByGate.set(gateCommand.gateId, gateCommand);
+          appendOperationEvent(store, createOperationEvent({
+            session,
+            eventType: 'exit_approved',
+            status: session.status,
+            gateId: gateCommand.gateId,
+            exitTime: exitAt,
+            overtimeThb: 0,
+            source: 'system',
+            notes: 'Exit approved'
+          }));
+        } else {
+          appendOperationEvent(store, createOperationEvent({
+            session,
+            eventType: 'exit_overtime_due',
+            status: session.status,
+            gateId: body.gateId ?? 'exit-1',
+            exitTime: new Date(),
+            overtimeThb: overtime.amountDueThb,
+            source: 'system',
+            notes: 'Overtime payment required'
+          }));
         }
 
         json(response, 200, {
